@@ -1,0 +1,132 @@
+---
+title: "Results Summary"
+output: html_document
+---
+
+#### --> e.g., check spatial compatibility of different reduced spatial coverage approaches
+### -> also see predictions inside monitoring area and outside (how far out can u predict?)
+
+### --> ?	estimate performance statistics using the observations from our full campaign as the reference (gold standard)
+
+### -> are prediction errors worse at some places with reduced sampling (e.g., airport?)
+
+### --> ? prediciton models (?ANOVA) looking at what impacts MSE the most?
+
+
+```{r}
+pacman::p_load(knitr, kableExtra, broom,
+               ggpubr, tidyverse,
+               ggrepel, #geom_label_repel
+               ggmap, sf, ggspatial, #mapping...adding scales, N arrows
+               ggrepel, #avoid overlapping labels
+               units, #convert between e.g., m to km
+               #time series data 
+               lubridate,
+               
+               fmsb, #percentile()
+               GGally, #ggpairs()
+               VCA #anovaVCA()
+               )    
+ 
+
+# ggplot settings
+theme_set(theme_bw())
+theme_update(legend.position = "bottom")
+
+##boxplot outlier
+outlier_size <- 0.7
+outlier_alpha <- 0.4
+
+source("0_functions.R")
+
+set.seed(1)
+```
+
+# Stops used
+
+range of times used for calculating annual averages; number of stops; check that temporal balance remains after dropping initial stops
+
+```{r}
+
+```
+
+
+# Summary of simulation designs
+
+e.g., for each design: description, range of # visits used, # stops used, 
+
+```{r}
+
+```
+
+
+
+# Annual averages 
+
+compare annual averages from temporal simulations 
+
+```{r}
+
+```
+
+# covariates used in models
+
+n?
+
+```{r}
+
+```
+
+
+# Clustered/Validation Sets
+
+show clustered validation groups; including routes
+
+show diff sets: e.g., test, validation, "out-of-region"
+
+```{r}
+
+
+```
+
+
+# Predictions
+
+```{r}
+
+```
+
+
+Kriging has an assumption of normally distributed residuals. log transform if these are not normally distributed. 
+
+### --> ? *look at distribution of residuals at 280 sites after subtracting regression part 
+
+
+```{r}
+
+```
+
+
+
+# Model Performances
+
+RMSE, error, R2..
+
+
+```{r}
+
+
+```
+
+
+
+# Maps/plots of prediction differences
+
+how to predictions change across designs? 
+
+
+```{r}
+
+```
+
+
