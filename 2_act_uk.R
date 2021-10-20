@@ -73,6 +73,8 @@ annual <- readRDS(file.path("Output", "annual_training_set.rda")) %>%
   #convert to sf
   st_as_sf(coords = c('longitude', 'latitude'), crs=project_crs, remove = F) %>%
   st_transform(m_crs) %>%
+  # log transform before modeling
+  mutate_at(vars(ma200_ir_bc1:pnc_noscreen), ~log(.)) %>%
   #log-transform UFPs since these are right skewed. all other variables look fine.
   #mutate(pnc_noscreen = log(pnc_noscreen)) %>%
   gather("variable", "value", ma200_ir_bc1:pnc_noscreen) %>%
@@ -84,9 +86,9 @@ annual_test_set <- readRDS(file.path("Output", "annual_test_set.rda")) %>%
   left_join(readRDS(file.path("Output", "mm_cov_test_set.rda"))) %>%
   #convert to sf
   st_as_sf(coords = c('longitude', 'latitude'), crs=project_crs, remove = F) %>%
-  st_transform(m_crs) #%>%
-  #log-transform UFPs since these are right skewed. all other variables look fine.
-  #mutate(value = ifelse(variable == "pnc_noscreen", log(value), value))
+  st_transform(m_crs) %>%
+  # log transform before modeling
+  mutate(value = log(value))
  
 ##################################################################################################
 # COMMON VARIABLES
@@ -107,9 +109,9 @@ var_names <- unique(annual$variable)
 # SETUP
 ##################################################################################################
 
-# # everything look fairly normally distributed after UFPs are log-transformed 
+# # everything look fairly normally distributed after UFPs are log-transformed
 # annual %>%
-#   filter(design == "full training campaign") %>%
+#   filter(grepl("full", design)) %>%
 #   ggplot(aes(x=value)) +
 #   facet_wrap(~variable, scales="free") +
 #   geom_histogram() +
@@ -226,8 +228,8 @@ uk_pls <- function(modeling_data, # data for fitting pls-uk models
    ############################################################################################################
   # fit PLS model to estimate fewer components from geocovariates
   
-  print(paste(first(modeling_data$version), first(modeling_data$variable), "campaign ", first(modeling_data$campaign)#, "test set ", c(1:10)[!c(1:10) %in% unique(modeling_data$cluster)]
-              ))
+  # print(paste(first(modeling_data$version), first(modeling_data$variable), "campaign ", first(modeling_data$campaign)#, "test set ", c(1:10)[!c(1:10) %in% unique(modeling_data$cluster)]
+  #             ))
   
   pls_model <- plsr(as.formula(paste('value ~', paste(cov_names., collapse = "+"))),
                     data = modeling_data, ncomp = pls_comp_n., scale=T, center=T)
@@ -324,8 +326,6 @@ random_fold_predictions <- mclapply(group_split(annual, spatial_temporal, design
   bind_rows() %>% 
   select(common_vars) %>%
   mutate(out_of_sample = "Random 10-Fold")  
-
-
 
 
 # 1. test set predictions
@@ -444,17 +444,20 @@ test_gs_estimates <- annual_test_set %>% st_drop_geometry() %>%
 gs_estimates <- bind_rows(annual_gs_estimates, test_gs_estimates)
 
 # estimates from specific campaign simultaions (n=278 sites)
+## note that these only change w/ temporal sims where fewer visits/site are used to estimate annual averages
 campaign_estimates <- annual %>% st_drop_geometry() %>%
   distinct(location, design, version, campaign, variable, value) %>%
   rename(campaign_estimate = value)
 
 
 # combine everything
-predictions <- rbind(random_fold_predictions, test_set_predictions) %>%
-  rbind(route_predictions) %>%
+predictions <- rbind(test_set_predictions, route_predictions) %>%
+  rbind(random_fold_predictions) %>%
   #left join b/c locations w/ predictions may be fewer than the 309 sites if dno't do 10FCV
   left_join(gs_estimates) %>%
-  left_join(campaign_estimates)
+  left_join(campaign_estimates) %>%
+  #put back on native scale before evaluating
+  mutate_at(vars(contains("estimate"), prediction), ~exp(.))
   
 
 ##################################################################################################
@@ -463,3 +466,6 @@ predictions <- rbind(random_fold_predictions, test_set_predictions) %>%
 saveRDS(predictions, file.path("Output", "predictions.rda"))
 
 #tictoc::toc()
+
+print("done with 2_act_uk.R")
+

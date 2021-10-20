@@ -1,31 +1,52 @@
 ---
-title: "Results Summary"
-output: html_document
+title: "ACT-TRAP Simulations Results Summary"
+author: "Magali Blanco"
+date: ' `r Sys.time()` '
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '3'
+    number_sections: true
+    toc_float: true
+    collapsed: false
+    smooth_scroll: false
+editor_options: 
+  chunk_output_type: console
+params:
+  args: myarg
 ---
 
-#### --> e.g., check spatial compatibility of different reduced spatial coverage approaches
-### -> also see predictions inside monitoring area and outside (how far out can u predict?)
 
-### --> ?	estimate performance statistics using the observations from our full campaign as the reference (gold standard)
+```{r, setup, include=F}
+# Clear workspace of all objects and unload all extra (non-base) packages
+rm(list = ls(all = TRUE))
+if (!is.null(sessionInfo()$otherPkgs)) {
+  res <- suppressWarnings(
+    lapply(paste('package:', names(sessionInfo()$otherPkgs), sep=""),
+           detach, character.only=TRUE, unload=TRUE, force=TRUE))
+}
 
-### -> are prediction errors worse at some places with reduced sampling (e.g., airport?)
+knitr::opts_chunk$set(echo = F, 
+                      cache=F, cache.comments = F, 
+                      message = F, warning = F, 
+                      tidy.opts=list(width.cutoff=60), tidy=TRUE,
+                      fig.height = 8, fig.width = 8
+                      )  
 
-### --> ? prediciton models (?ANOVA) looking at what impacts MSE the most?
-
-
-```{r}
-pacman::p_load(knitr, kableExtra, broom,
-               ggpubr, tidyverse,
-               ggrepel, #geom_label_repel
+pacman::p_load(kable, kableExtra, #broom, #knitr, 
+  ggpubr, 
+  tidyverse,
+               #ggrepel, #geom_label_repel
                ggmap, sf, ggspatial, #mapping...adding scales, N arrows
-               ggrepel, #avoid overlapping labels
+               # ggrepel, #avoid overlapping labels
                units, #convert between e.g., m to km
-               #time series data 
-               lubridate,
-               
-               fmsb, #percentile()
-               GGally, #ggpairs()
-               VCA #anovaVCA()
+               # #time series data 
+               # lubridate,
+               # 
+               # fmsb, #percentile()
+               # GGally, #ggpairs()
+               # VCA #anovaVCA()
                )    
  
 
@@ -33,76 +54,521 @@ pacman::p_load(knitr, kableExtra, broom,
 theme_set(theme_bw())
 theme_update(legend.position = "bottom")
 
-##boxplot outlier
-outlier_size <- 0.7
-outlier_alpha <- 0.4
-
-source("0_functions.R")
 
 set.seed(1)
+
 ```
 
-# Stops used
+
+
+# Functions
+
+```{r}
+# fn labels variables
+
+label_pollutant <- function(dt) {
+  
+  dt <- dt %>%
+    mutate(
+     variable = case_when(
+       variable == "co2_umol_mol" ~ "CO2 (ppm)", 
+       variable == "ma200_ir_bc1" ~ "BC (ng/m3)", 
+       variable == "no2" ~ "NO2 (ppb)", 
+       variable == "pm2.5_ug_m3" ~ "PM2.5 (ug/m3)",
+       variable == "pnc_noscreen" ~ "UFP (pt/cm3)",
+       TRUE ~ variable
+       ),
+     variable = factor(variable, levels = c("PM2.5 (ug/m3)", "BC (ng/m3)", "UFP (pt/cm3)", "NO2 (ppb)", "CO2 (ppm)"))
+     )
+  
+  return(dt)
+      
+  }
+```
+
+
+```{r}
+
+# facet_wrap_equal() function acts like facet_wrap() in ggplot but it sets the axes ranges (min/max) of each facet to same scale so that the 1-1 line is always down the middle :D !!
+
+# code source: https://fishandwhistle.net/post/2018/modifying-facet-scales-in-ggplot2/ 
+
+FacetEqualWrap <- ggproto(
+  "FacetEqualWrap", FacetWrap,
+  
+  train_scales = function(self, x_scales, y_scales, layout, data, params) {
+    
+    # doesn't make sense if there is not an x *and* y scale
+    if (is.null(x_scales) || is.null(x_scales)) {
+      stop("X and Y scales required for facet_equal_wrap")
+    }
+    
+    # regular training of scales
+    ggproto_parent(FacetWrap, self)$train_scales(x_scales, y_scales, layout, data, params)
+    
+    # switched training of scales (x and y and y on x)
+    for (layer_data in data) {
+      match_id <- match(layer_data$PANEL, layout$PANEL)
+      
+      x_vars <- intersect(x_scales[[1]]$aesthetics, names(layer_data))
+      y_vars <- intersect(y_scales[[1]]$aesthetics, names(layer_data))
+      
+      SCALE_X <- layout$SCALE_X[match_id]
+      ggplot2:::scale_apply(layer_data, y_vars, "train", SCALE_X, x_scales)
+      
+      SCALE_Y <- layout$SCALE_Y[match_id]
+      ggplot2:::scale_apply(layer_data, x_vars, "train", SCALE_Y, y_scales)
+    }
+    
+  }
+)
+
+facet_wrap_equal <- function(...) {
+  # take advantage of the sanitizing that happens in facet_wrap
+  facet_super <- facet_wrap(...)
+  
+  ggproto(NULL, FacetEqualWrap,
+          shrink = facet_super$shrink,
+          params = facet_super$params
+  )
+}
+
+
+#same as above but for facet_grid()
+FacetEqualGrid <- ggproto(
+  "FacetEqualGrid", FacetGrid,
+  
+  train_scales = function(self, x_scales, y_scales, layout, data, params) {
+    
+    # doesn't make sense if there is not an x *and* y scale
+    if (is.null(x_scales) || is.null(x_scales)) {
+      stop("X and Y scales required for facet_equal_wrap")
+    }
+    
+    # regular training of scales
+    ggproto_parent(FacetGrid, self)$train_scales(x_scales, y_scales, layout, data, params)
+    
+    # switched training of scales (x and y and y on x)
+    for (layer_data in data) {
+      match_id <- match(layer_data$PANEL, layout$PANEL)
+      
+      x_vars <- intersect(x_scales[[1]]$aesthetics, names(layer_data))
+      y_vars <- intersect(y_scales[[1]]$aesthetics, names(layer_data))
+      
+      SCALE_X <- layout$SCALE_X[match_id]
+      ggplot2:::scale_apply(layer_data, y_vars, "train", SCALE_X, x_scales)
+      
+      SCALE_Y <- layout$SCALE_Y[match_id]
+      ggplot2:::scale_apply(layer_data, x_vars, "train", SCALE_Y, y_scales)
+    }
+    
+  }
+)
+
+facet_grid_equal <- function(...) {
+  # take advantage of the sanitizing that happens in facet_wrap
+  facet_super <- facet_grid(...)
+  
+  ggproto(NULL, FacetEqualGrid,
+          shrink = facet_super$shrink,
+          params = facet_super$params
+  )
+}
+
+
+```
+
+
+
+# Upload Data 
+
+
+```{r}
+# mapping variables
+project_crs <- 4326  #lat/long
+m_crs <- 32148
+
+
+# simulation details
+sims0 <- readRDS(file.path("Output", "annual_training_set.rda")) %>%  
+  distinct(location, route, visits, campaign, design, version, spatial_temporal)
+
+# #location lat/long 
+# loc_lat_long <- readRDS(file.path("Output", "location_lat_long.rda")) %>%
+#   st_as_sf(coords = c('longitude', 'latitude'), crs=project_crs, remove = F) %>%
+#   st_transform(m_crs)  
+
+# uk predictions
+predictions0 <- readRDS(file.path("Output", "predictions.rda")) %>% 
+  gather("reference", "estimate", contains("estimate")) %>%
+  # some campaigns don't have "estimtes" for test set locations
+  drop_na(estimate)
+
+model_eval0 <- readRDS(file.path("Output", "model_eval.rda"))
+
+test_locations <- predictions0 %>%
+  filter(out_of_sample == "Test") %>% 
+  distinct(location) %>% pull()
+
+#location lat/long 
+loc_lat_long <- readRDS(file.path("Output", "location_lat_long.rda")) %>%
+  st_as_sf(coords = c('longitude', 'latitude'), crs=project_crs, remove = F) %>%
+  st_transform(m_crs) %>%
+  mutate(route = factor(route),
+         set = ifelse(location %in% test_locations, "Test Set", "Simulation Set")
+         )
+          
+# monitoring area shp 
+monitoring_region <- readRDS(file.path("..", "..", "1. Our Campaign", "Our Campaign R", "Data", "Output", "GIS", 
+                                       #"monitoring_area_shp.rda"
+                                       "monitoring_land_shp.rda"
+                                       )) %>%
+  st_transform(m_crs)
+```
+
+
+
+```{r}
+  
+version_levels <- c("all training  data",
+                    #fewer visits
+                    as.character(seq(5, 25, 5)),
+                    #fewer hours
+                    "business", "rush", "business & rush",
+                    #fewer seasons
+                    as.character(seq(1,3)),
+                    #less temporal balance
+                    "balanced by season", "balanced by season & TOW2",
+                    
+                    #fewer sites
+                    as.character(seq(50, 250, 50)),
+                    #fewer routes
+                    "1-2", "1-4", "1-6"
+                    )
+
+
+design_levels <- c("full", "fewer visits", "fewer hours", "fewer seasons", "reduced balance",
+                   "fewer sites", "fewer routes"
+                   )
+
+model_eval <- model_eval0 %>%
+  mutate(version = factor(version, levels = version_levels),
+         design = factor(design, levels = design_levels),
+         training_monitors_per_100km2 = factor(round(training_monitors_per_100km2)),
+         mean_train_to_pred_dist_km = factor(round(mean_train_to_pred_dist_km))
+         ) %>%
+  #label pollutant
+  label_pollutant()
+  
+sims <- sims0 %>% 
+  mutate(
+    version = factor(version, levels = version_levels),
+    design = factor(design, levels = design_levels)
+    )
+
+predictions <- label_pollutant(predictions0) %>% 
+  mutate(
+    version = factor(version, levels = version_levels),
+    design = factor(design, levels = design_levels)
+    )
+
+```
+
+
+```{r}
+# common vars
+
+var_names <- unique(predictions$variable)
+
+```
+
+
+
+# Simulation Descriptions
 
 range of times used for calculating annual averages; number of stops; check that temporal balance remains after dropping initial stops
 
+* avg # of visits is lower because only visits with all pollutant measures were used. Number varied for simulations w/ fewer random site visits.
+
 ```{r}
+sims %>%
+  group_by(spatial_temporal, design, version) %>%
+  summarize(
+    no_campaigns = max(campaign),
+    no_sites = length(unique(location)),
+    avg_visits_per_site = round(mean(visits))
+    ) %>% 
+  mutate(spatial_temporal = factor(spatial_temporal, levels = c("spatial temporal", "temporal", "spatial"))) %>%
+  arrange(spatial_temporal) %>% 
+  
+  group_by(spatial_temporal, design) %>%
+  summarize(
+    version = paste(unique(version), collapse = ", "),
+    no_sites = paste(unique(no_sites), collapse = ", "),
+    avg_visits_per_site = paste(unique(avg_visits_per_site), collapse = ", "),
+    no_campaigns = unique(no_campaigns)
+  ) %>%
+  
+  kable(caption = "Simulation Descriptions", 
+        col.names = c("Design Type", "Design", "Versions", "Sites", "Visits per Site", "No. Campaigns")
+        ) %>%
+  kable_styling() %>%
+  add_footnote(c("average visits per site for Designs: full, fewer routes, fewer sites",
+                 "the fewer site design versions can have different sites across simulations"
+                 ))
+  
+
 
 ```
 
 
-# Summary of simulation designs
 
-e.g., for each design: description, range of # visits used, # stops used, 
+
+# Map of Stops
+
+
+```{r}
+# create background map for grid/mapping
+#bbox <- st_bbox(act_shp)
+
+#make box little bigger than monitoring area
+bbox <- st_bbox(st_transform(st_buffer(loc_lat_long, 10000), project_crs) )
+
+names(bbox) <- c("left", "bottom", "right", "top")
+
+# background map
+map0 <- suppressMessages(get_stamenmap(bbox = bbox, zoom = 11, #maptype = "toner" #"toner-lite"
+                                      maptype = "terrain" )) %>%
+  # Make basic map image from the tiles
+  ggmap(ggmap = ., darken = c(0.5, "white")) + theme_void()
+
+## usage example: 
+# map0 + geom_point()
+
+```
+
+## main 
+
+* test set sites =31 (black dots)      
+* sites available for simulations = 278   
+
+```{r, fig.height=10}
+
+map1 <- map0 + 
+  #monitoring area
+  geom_sf(data = st_transform(monitoring_region, project_crs), aes(fill = "Monitoring Area"), inherit.aes = F,
+          #reduce/eliminate outline
+          lwd = 0.1, alpha = 0.1) + 
+  
+  # test set - black dots
+  geom_sf(data = filter(st_transform(loc_lat_long, project_crs), grepl("Test", set)),  
+                        inherit.aes = F, size=3) + 
+  
+  #monitoring stops
+  geom_sf(data = st_transform(loc_lat_long, project_crs), aes(col = route, shape=route), inherit.aes = F, size=2) + 
+  
+  # add scale & N arrow to top
+  geom_sf(data = st_transform(monitoring_region, project_crs), inherit.aes = FALSE,
+          #don't actually the polygon our outline
+          alpha=0, lwd = 0) +
+  annotation_scale(data = st_transform(monitoring_region, project_crs), location = "tl") +
+  annotation_scale(data = st_transform(monitoring_region, project_crs), location = "tl", unit_category ="imperial", pad_y = unit(0.55, "cm")) +
+    annotation_north_arrow(location = "tl", which_north = "true", style = north_arrow_fancy_orienteering,
+                           pad_y = unit(0.5, "in")
+                           ) +
+  theme_bw() +
+  
+  theme(legend.justification=c(1,1), #(0,1)
+        legend.position=c(1,1),#(0,1)
+        legend.background =  element_blank()
+        ) + 
+  scale_shape_manual(values = 1:9) +
+  #scale_col_manual(values = 1:9) +
+  
+  #order how legend items are presented
+  guides(fill = guide_legend(order = 1)) +
+  
+  #add attribution/reference to bottom left
+  geom_text(aes(x=-Inf, y=-Inf, hjust=-0.01, vjust=-0.5,
+                label= "Map tiles by Stamen Design, under CC BY 3.0. \nData by OpenStreetMap, under ODbL."), size=3) +
+    
+  labs(x = "Longitude", y = "Latitude",
+         fill = "",
+         col = "Route",
+       shape = "Route"
+         ) 
+
+map1
+
+ggsave(file.path("..", "Manuscript", "Images", "map.png"), width = 7.5, height = 10)
+
+```
+
+
+## fewer routes
+
+locations colored by route group 
 
 ```{r}
 
+temp <- loc_lat_long %>%
+  mutate(
+    route = case_when(
+      route %in% c(1:2) ~ "Routes 1-2",
+      route %in% c(3:4) ~ "Routes 3-4",
+      route %in% c(5:6) ~ "Routes 5-6",
+      route %in% c(7:9) ~ "Out-of-region,\nRoutes 7-9"
+      ),
+    #route = ifelse(grepl("Test", set), "Test set", route)
+  )
+
+map0 + 
+  #monitoring area
+  geom_sf(data = st_transform(monitoring_region, project_crs), aes(fill = "Monitoring Area"), inherit.aes = F,
+          #reduce/eliminate outline
+          lwd = 0.1, alpha = 0.1) + 
+  #monitoring stops
+  geom_sf(data = st_transform(temp, project_crs), aes(col = route), inherit.aes = F, size=2) + 
+  
+  # test set - black dots
+  geom_sf(data = filter(st_transform(loc_lat_long, project_crs), grepl("Test", set)),
+                        inherit.aes = F, size=3) +
+  # # add scale & N arrow to top
+  # geom_sf(data = st_transform(monitoring_region, project_crs), inherit.aes = FALSE,
+  #         #don't actually the polygon our outline
+  #         alpha=0, lwd = 0) +
+  # annotation_scale(data = st_transform(monitoring_region, project_crs), location = "tl") +
+  # annotation_scale(data = st_transform(monitoring_region, project_crs), location = "tl", unit_category ="imperial", pad_y = unit(0.55, "cm")) +
+  #   annotation_north_arrow(location = "tl", which_north = "true", style = north_arrow_fancy_orienteering,
+  #                          pad_y = unit(0.5, "in")
+  #                          ) +
+  theme_bw() +
+  theme(legend.justification=c(1,1), legend.position=c(1,1), legend.background =  element_blank()) + 
+
+  #order how legend items are presented
+  guides(fill = guide_legend(order = 1)) +
+  
+  #add attribution/reference to bottom left
+  geom_text(aes(x=-Inf, y=-Inf, hjust=-0.01, vjust=-0.5,
+                label= "Map tiles by Stamen Design, under CC BY 3.0. \nData by OpenStreetMap, under ODbL."), size=3) +
+    
+  labs(x = "Longitude", y = "Latitude",
+         fill = "",
+         col = "Route",
+       shape = "Route"
+         ) 
+
+
+
+
 ```
+
+
 
 
 
 # Annual averages 
 
-compare annual averages from temporal simulations 
+## estimates 
+
+distribution of annual averages from full campaign (n=278 sites)
 
 ```{r}
 
-```
+predictions %>%
+  filter(grepl("full", design),
+         grepl("campaign", reference)
+         ) %>%
+  ggplot(aes(x=estimate)) +
+  facet_wrap(~variable, scales="free") +
+  geom_histogram() +
+  labs(title = "Distribution of annual average site estimates")
 
-# covariates used in models
-
-n?
-
-```{r}
-
-```
-
-
-# Clustered/Validation Sets
-
-show clustered validation groups; including routes
-
-show diff sets: e.g., test, validation, "out-of-region"
-
-```{r}
 
 
 ```
 
+annual average estimates for simulations 
 
-# Predictions
+```{r, fig.height=10, fig.width=10}
 
-```{r}
+predictions %>%
+  filter(grepl("campaign", reference)) %>%
+  mutate(version = factor(version, levels = version_levels)) %>%
+  
+  group_by(design, version) %>%
+  mutate(#no_sites = length(unique(location))
+          avg_visits = round(mean(visits)),
+          # avg_visits = factor(avg_visits, levels = sort(unique(avg_visits))
+          #                     )
+         ) %>% #ungroup() %>% distinct(avg_visits) %>% pull()
+  
+  ggplot(aes(y=version, col=avg_visits, x=estimate)) + 
+  facet_grid(design~variable, scales="free", switch = "y") + 
+  geom_boxplot(#show.legend = F
+               ) +
+  # reverse color
+  #scale_color_continuous(trans = "reverse") +
+  scale_color_continuous(low="#56B1F7", high="#132B43") +
+  
+  #scale_x_log10() +
+  
+  labs(col = "Avg Visits Per Site")
+   
 
 ```
 
 
-Kriging has an assumption of normally distributed residuals. log transform if these are not normally distributed. 
-
-### --> ? *look at distribution of residuals at 280 sites after subtracting regression part 
+### --> map high conc sites
 
 
 ```{r}
+
+
+
+
+
+
+```
+
+
+
+## predictions 
+
+predictions at test set locations (n=31)
+
+```{r, fig.height=10}
+
+predictions %>%
+  #predictions to test set
+  filter(grepl("Test", out_of_sample)) %>%
+  mutate(version = factor(version, levels = version_levels)) %>%
+  
+  group_by(design, version) %>%
+  
+  ggplot(aes(y=version, x=prediction, col=out_of_sample, 
+             )) + 
+  facet_grid(design~variable, scales="free", switch = "y") + 
+  geom_boxplot() +
+  #stat_summary(geom="line", fun = median, aes(group=out_of_sample), position = position_dodge(width = 0.9))
+  # reverse color
+  #scale_color_continuous(low="#56B1F7", high="#132B43")  
+  labs(col = "Out-of-Sample-Set")
+
+```
+
+
+ 
+
+
+
+
+
+
+```{r}
+# Kriging has an assumption of normally distributed residuals. log transform if these are not normally distributed. 
+# 
+# ### --> ? *look at distribution of residuals at 280 sites after subtracting regression part 
 
 ```
 
@@ -110,13 +576,286 @@ Kriging has an assumption of normally distributed residuals. log transform if th
 
 # Model Performances
 
-RMSE, error, R2..
+* pollutants were all modeled on the log scale, but evaluated on the native scale 
 
+
+## Scatter/line plots
+
+* high concentration sites tend to be underpredicted, especially UFPs
+
+scatterplot of full campaign 
+
+```{r, fig.height=10}
+# compare GS estimest vs campaign predictions at test set (used below in RMSE, etc.) 
+
+#i=1
+
+predictions %>%
+  filter(grepl("gs_", reference),
+         # grepl(#"10-Fold", 
+         #   "Test",
+         #       out_of_sample),
+         
+         #only look at full campaign
+         grepl("full", design)
+         
+  ) %>%
+  {
+    ggplot(., aes(x=estimate, y=prediction, #col=version
+               col=out_of_sample
+               )) +
+      facet_wrap_equal(~variable, 
+                     #design~, 
+                     scales="free", #ncol = length(unique(.$design))
+               # strip.position#switch = "y"
+               ) +
+      theme(aspect.ratio=1) +
+      #coord_fixed() +
+    
+      geom_point(alpha=0.4) +
+      geom_smooth(se=F, method = "lm"
+                  ) +
+      scale_shape_manual(values = 1:length(unique(predictions$design))) +
+      geom_abline(slope = 1, intercept = 0, linetype=2, alpha=0.5) +
+      labs(col = "Out-of-Sample")
+
+  }
+
+```
+
+
+prediction error, relative to GS estimate 
+
+* **note that each boxplot represents $max(sims$campaign)$ simulations**
 
 ```{r}
 
 
 ```
+
+
+```{r, fig.height=10}
+
+predictions %>%
+  mutate(error = prediction-estimate) %>%
+  filter(# drop for now  
+         !grepl("Random 10-Fold", out_of_sample)
+         #grepl("Test", out_of_sample)
+         
+         ) %>%  
+  
+  ggplot(aes(x = error,
+             y=version,
+             col = out_of_sample
+             ),
+         ) + 
+  facet_grid(design~variable, scales = "free" ) + 
+  geom_boxplot() +
+  geom_smooth(se=F, orientation = "y") +
+
+  labs(x = "Prediction Error",
+       col = "Validation Set"
+        )
+
+
+
+
+```
+
+
+
+## Design performances 
+
+### --> * hard to tell what's going on w/ routes here b/c what is changing is: # sites & how far things are extrapollated; better to take LOO clustered approach?; 
+
+
+* vertical line is the model performance of the "full" campaign (n=278 sites x ~ 26 visits/site) 
+
+```{r, fig.height=10}
+full_campaign <- model_eval %>%
+  filter(grepl("gs_", reference),
+         grepl("full", design),
+         
+         # for now, drop
+         #!grepl("Random 10-Fold", out_of_sample)
+         
+         ) %>%
+  distinct(mean_train_to_pred_dist_km, training_monitors_per_100km2, out_of_sample, variable, reference, RMSE, MSE_based_R2, reg_based_R2)
+
+
+eval_cols <- c("RMSE", "MSE_based_R2", "reg_based_R2")
+
+```
+
+
+```{r}
+for (i in seq_along(eval_cols[1:2])) {
+  #i=1
+  p <- model_eval %>%
+    filter(grepl("gs_", reference),
+           !grepl("full", design),
+           
+           # for now, drop
+           #!grepl("Random 10-Fold", out_of_sample)
+           
+           ) %>%  
+    
+    ggplot(aes(x = !!as.symbol(eval_cols[i]), y=version, col = out_of_sample)) + 
+    facet_grid(design~variable, scales = "free", switch = "y") + 
+    geom_boxplot() +
+    geom_smooth(se=F, orientation = "y") +
+    geom_vline(data=full_campaign, aes(xintercept=!!as.symbol(eval_cols[i]), col = out_of_sample)) + 
+    
+    labs(col = "Validation Set"
+          )
+  
+  print(p)
+}
+ 
+```
+ 
+
+## Spatial performance 
+
+```{r}
+# make a 100 km2 circle
+
+#ggplot(data=loc_lat_long, aes(label=location)) + geom_sf_label()
+
+monitoring_area <- round(set_units(st_area(monitoring_region), "km2"))
+
+
+#find radius needed to make a 100 km2 circle
+# A (km2) = pi*r2
+r <- sqrt(100/pi)
+
+loc1 <- "MC0002"
+
+pt <- loc_lat_long %>%
+  filter(location == loc1
+         ) %>%
+  st_transform(m_crs) %>%
+  #convert km radius to m radius
+  st_buffer(r*10^3)
+
+# #check that things work. # looks good   
+# st_area(pt) %>% units::set_units("km2")
+
+# plot
+ggplot(data=monitoring_region) + 
+  geom_sf(aes(fill = "monitoring region")) + 
+  geom_sf(data=pt, aes(fill = "100 km2 area")) + 
+  geom_sf(data=filter(loc_lat_long, location == loc1), #aes(label=location)
+          ) + 
+  labs(title = paste0("100 km2 area relative to the monitoring area \n(", monitoring_area, " km2)"),
+       fill = ""
+       )
+
+
+
+
+```
+
+
+
+
+performance statistics for fewer sites simulations, but showing statistics by monitor density (#/100km2) rather than by number of sites included
+
+
+
+```{r}
+#model_eval <- model_eval %>% rename(mean_train_to_pred_dist_km = mean_train_to_pred_dist_m)
+
+spatial_designs <- model_eval %>%
+  filter(
+    grepl("fewer sites", design), #grepl("spatial", spatial_temporal, ignore.case = T),
+    grepl("gs_estimate", reference),
+    !grepl("Routes", out_of_sample)
+    ) 
+
+train_test_dist_rank <- spatial_designs  %>%
+  #calc avg distance acros simulations & CV folds. round to nearets 100 meters 
+  group_by(design, version, out_of_sample) %>%
+  mutate(mean_train_to_pred_dist_km = round(mean(as.numeric(as.character(mean_train_to_pred_dist_km))), 1)) %>%
+  distinct(mean_train_to_pred_dist_km) %>% pull() %>% sort() %>% unique() #%>% as.character() %>% as.factor()
+
+#sort(as.numeric(as.character(unique(mean_train_to_pred_dist_km))))
+
+spatial_designs <- spatial_designs %>%
+  #calc avg distance acros simulations & CV folds. round to nearets 100 meters 
+  group_by(design, version, out_of_sample) %>%
+  mutate(mean_train_to_pred_dist_km = round(mean(as.numeric(as.character(mean_train_to_pred_dist_km))), 1),
+         
+         mean_train_to_pred_dist_km = factor(mean_train_to_pred_dist_km, 
+                                             levels =  train_test_dist_rank)
+         )
+   
+
+#only look at 2nd variable for now. first is noisy and not very different
+spatial_eval_cols <- c("mean_train_to_pred_dist_km", "training_monitors_per_100km2")[2]
+#i=1
+#x = eval_cols[1]
+
+for (i in seq_along(spatial_eval_cols)) {
+  
+  # don't look at regression-based R2 for now
+  lapply(eval_cols[1:2], function(x) {
+  
+    p <- spatial_designs %>%
+      group_by(design, version, out_of_sample, ) %>%
+    
+      ggplot(aes(x = !!as.symbol(x), y= !!as.symbol(spatial_eval_cols[i]), #group=!!as.symbol(x),
+                 col = out_of_sample)) +
+      facet_grid(design~variable, scales = "free", switch = "y") +
+      geom_boxplot(orientation = "y") +
+      #geom_smooth(se=F, method="lm", orientation = "y") +
+      geom_vline(data=full_campaign, aes(xintercept=!!as.symbol(x), col = out_of_sample)) +
+      labs(col = "Validation Set")
+  
+    print(p)
+    
+    })
+}
+
+
+```
+
+### --> ? LS: "show min distance to routes 7-9" 
+
+
+```{r}
+knitr::knit_exit()
+```
+
+
+
+
+
+
+
+## ANOVAs 
+
+### --> ? prediciton models (?ANOVA) looking at what impacts MSE the most?
+
+```{r}
+
+
+
+```
+
+ 
+## Prediction Error
+
+### -> are prediction errors worse at some places with reduced sampling (e.g., airport?)
+
+```{r}
+
+
+```
+
+
+
+
 
 
 
@@ -126,6 +865,8 @@ how to predictions change across designs?
 
 
 ```{r}
+
+
 
 ```
 
