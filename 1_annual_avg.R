@@ -2,10 +2,7 @@
 # 1. change directory: cd ~/Documents/Post\ Doc/Study\ Projects/ACT\ TRAP\ MM/ACT\ HEI\ Supp/act_hei_aim1a
 # 2. run bash script: bash run_scripts.bash
 
-
 # to run individual script in terminal:
-# 1. in terminal, change directory: 
-#   cd ~/Documents/Post\ Doc/Study\ Projects/ACT\ TRAP\ MM/ACT\ HEI\ Supp/act_hei_aim1a
 # 2. enter in terminal: Rscript 1_act_annual.R 
 
 # examples of parallel processing: https://jennybc.github.io/purrr-tutorial/ls12_different-sized-samples.html 
@@ -47,30 +44,45 @@ set.seed(1)
 plan(multisession, workers = 6)
  
 
-
 ##################################################################################################
 # LOAD DATA
 ##################################################################################################
 #stop data with temporal variables included
-stops_all <- readRDS(file.path("..", "..", "2. Prediction Models", "prediction_models_R", "Output", "stops_with_time_vars.rda")) %>%
+stops_all <- readRDS(file.path("..", "..", "1. Our Campaign", "Our Campaign R", "Data", "Output", "stop_data_win_medians.rda")) %>%
   #drop duplicate UFP instruments
   filter(!variable %in% c("pmdisc_number", "pnc_screen", "ns_total_conc")) %>%
   #don't need these
-  select(-c(contains(c("pollutant", "range")))) %>%
+  select(-c(contains(c("pollutant", "range", "ufp_instrument")))) %>%
   # add route
-  mutate(route = as.numeric(gsub(".*R0", "", runname))) 
+  mutate(route = as.numeric(gsub(".*R0", "", runname)),
+         tow2 = ifelse(day %in% c("Sat", "Sun"), "weekend", "weekday")
+         ) 
 
 # only use non-test sites for simulations
-non_test_sites <- readRDS(file.path("Output", "mm_cov_train_set.rda")) %>%
+non_test_sites <- readRDS(file.path("Output", "mm_cov_train_set_hei.rda")) %>%
   distinct(location) %>% pull()
 
 stops <- filter(stops_all, location %in% non_test_sites)
+
+##########
+
+# stops_all %>% 
+#   filter(!location %in% non_test_sites) %>% 
+#   
+#   group_by(variable, location) %>% 
+#   # no. observations per site & pollutant
+#   summarize(n=n()) %>% 
+#   # distribution
+#   summarize(min = min(n), mean=mean(n), max=max(n))
+
+
+
 
 ##################################################################################################
 # COMMON VARIABLES
 ##################################################################################################
 # number of simulations
-sim_n <- 30 #30
+sim_n <- 30
 
 rush_hours <- c(7:10, 15:18)
 business_hours <- c(9:17)
@@ -87,27 +99,44 @@ fewer_hrs_seasons_n <- 12
 # ONLY KEEP STOPS W/ ALL POLLUTANTS
 ##################################################################################################
 
-keep_times <- stops %>%
+keep_times0 <- stops_all %>%
   distinct(time, variable, value) %>%
-  spread(variable, value) %>% #View() #8150 original stops
+  pivot_wider(names_from = "variable", values_from = "value") %>% 
   mutate(original_stops = n()) %>%
   drop_na() %>%
-  mutate(prop_remaining_stops = n()/original_stops) %>% #7345 stops left (90.12%)
+  mutate(
+    remaining_stops = n(),
+    prop_remaining_stops = remaining_stops/original_stops
+    ) 
+
+# 9,047 total original stops (309 site x ~26 visits/site)
+# after dropping stops w/o all 5 pollutant measures, we have: 8,137 in the training & 810 (see later code) in the test set
+# keep_times0
+
+keep_times <- keep_times0 %>% #7345 stops left (90.12%)
   distinct(time) %>% pull()
 
-#range(keep_times) # "2019-03-08 13:51:35 PST" "2020-03-17 23:12:29 PDT"
-
-
+# range(keep_times) # "2019-03-08 13:51:35 PST" "2020-03-17 23:12:29 PDT"
 
 stops <- filter(stops, time %in% keep_times)
 
-stops_w <- spread(stops, variable, value)
+#stops_w <- spread(stops, variable, value)
+stops_w <- pivot_wider(data = stops, names_from = "variable",values_from =  "value")
+
+saveRDS(stops_w, file.path("Output", "stops_used.rda"))
+
+
+
+### --> repeat for the test set, for consistency
+
+
+
+
+
 
 ##################################################################################################
 # TRUE ANNUAL AVERAGE
 ##################################################################################################
-
- 
 true_annual <- stops_w %>%
   group_by(location, route) %>%
   mutate(visits = n()) %>%
@@ -115,18 +144,18 @@ true_annual <- stops_w %>%
   mutate(
     campaign = 1,
     design = "full",
-    version = "all training  data"
+    version = "all training data"
   ) %>%
   ungroup()
   
    
-
-
 # save est set annual averages for validation later
+## this also uses the winsorized stop data & the same date ranges
 annual_test_set <- stops_all %>%
   filter(!location %in% non_test_sites,
-         #same date range as training data
-         time >= min(as.Date(keep_times)) & time <= max(as.Date(keep_times))
+         #same date range as training data; only keep times where all pollutants have values
+         time %in% keep_times
+         #time >= min(as.Date(keep_times)) & time <= max(as.Date(keep_times))
          ) %>%
   group_by(variable, location) %>%
   summarize(value = mean(value),
@@ -143,23 +172,13 @@ saveRDS(annual_test_set, file.path("Output", "annual_test_set.rda"))
 ##################################################################################################
 # FEWER VISITS
 
-## 1. reduced temporal balance
-### A. season-tow2 balanced (not by hour). (12 samples)
-### B. season-balanced (not by tow2 or hour). (4 samples)
-
-### --> note: this doesn't consider aggregating samples to 
-#              e.g., sample for first 2 wks of the season and then being done
-
-
-## 2. fewer random visits: seq(5,25,5)
-
 ##################################################################################################
 ## functions 
 
 ### sampling functions
 s_tow2_sample_fn <- function(df, wkday_visits = 2, wkend_visits = 1) {
   
-  no_visits <- ifelse(first(df$tow2) == "Weekday", wkday_visits, wkend_visits)
+  no_visits <- ifelse(first(df$tow2) == "weekday", wkday_visits, wkend_visits)
   df0 <- slice_sample(df, n  = no_visits)
   
   return(df0)
@@ -178,68 +197,50 @@ one_sample_avg <- function(my_list,# = stops_w_list,
     group_by(location, route) %>%
     mutate(visits = n()) %>%
     #calculate annual average
-    summarize_at(vars(variable_names, visits), ~mean(.))
+    summarize_at(all_of(c(variable_names, "visits")), ~mean(.))
   )
     
     return(result)
-}
+} 
 
 ##################################################################################################
-#repeat sampling many times
+# fewer days
 
-## 1. reduced temporally-balanced sampling 
+# x = group_split(stops_w, location, tow2)[[2]]
 
-### A. 12 samples: 4 season x 1 sample/wkend or 2 samples/wkday 
-balanced_season_tow2 <- future_replicate(n = sim_n, simplify = F,
-                    expr = one_sample_avg(my_list = group_split(stops_w, #variable, 
-                                                                location, season, tow2), 
-                                            my_sampling_fn = s_tow2_sample_fn)
-                    ) %>%
-  #unlist
+days <- future_replicate(n = sim_n,
+                         simplify = F,
+                        expr = mclapply(group_split(stops_w, location, tow2), mc.cores = 6, 
+                                        FUN = function(x) {slice_sample(x, n= fewer_hrs_seasons_n, replace=T) }) %>%
+                          #unlist results 
+                          bind_rows() %>%
+                          group_by(location, route, tow2) %>%
+                          mutate(visits = n(),
+                                 version = first(tow2),
+                                 design = "fewer days",
+                                 ) %>%
+                            group_by(location, route, design, version, visits) %>%
+                          #calculate annual average
+                          summarize_at(all_of(variable_names), ~mean(.)) ) %>%
   bind_rows() %>%
-  #add simulation number & label
-  group_by(location, #variable,  visits
-           ) %>%
-  mutate(campaign =  row_number(),
-         design = "reduced balance",
-         version = "balanced by season & TOW2") %>%
-  ungroup()
+  group_by(location, version) %>%
+  mutate(campaign = row_number()) %>%
+  #for merging with other sims
+  select(names(true_annual)) %>%
+  as.data.frame()
  
-
-# B. 1 sample per season
-#plan(multisession, workers = 6)
-
-
-balanced_season <- future_replicate(n = sim_n, simplify = F,
-                           expr = one_sample_avg(my_list = group_split(stops_w, #variable, 
-                                                                       location, season), 
-                                                 my_sampling_fn = function(x) slice_sample(x, n  = fewer_hrs_seasons_n/4))
-                      ) %>%
-  #unlist
-  bind_rows() %>%
-  #add simulation number & label
-  group_by(location, #variable,  visits
-           ) %>%
-  mutate(campaign =  row_number(),
-         design = "reduced balance",
-         version = "balanced by season")%>%
-  ungroup()
 
 ##################################################################################################
 #2. fewer seasons. keep the number of samples the same. 6 is approximately the # of samples/site/season (i.e., max for season ==1)
 
 ## notice that a few sites (e.g., MS0138 in winter) have < 6 samples/season, so we'll sample w/ replacement to keep the numebr of samples the same
-# stops_w %>% group_by(location, season) %>% summarize(n = n()) %>% ungroup() %>% summary()
 
-season_n <- c(1:3)
-
-#x = group_split(stops_w, location)[[1]]
+season_n <- c(1:4)  
 
 season_times <- data.frame()
 
 for (i in seq_along(season_n)) {
-  #i=1
-  
+
   temp <- future_replicate(n = sim_n,  
                            simplify = F,
                                     expr = one_sample_avg(my_list = group_split(stops_w, #variable, 
@@ -261,7 +262,7 @@ for (i in seq_along(season_n)) {
     #add simulation number & label
     group_by(location) %>%
     mutate(campaign =  row_number(),
-           design = "fewer seasons",
+           design = "balanced seasons",
            version = paste0(season_n[i])
            )%>%
     ungroup()
@@ -270,71 +271,42 @@ for (i in seq_along(season_n)) {
 
 }
 
-# OLD: 
-# ## 2. shorter campaign duration 
-# ### ISSUE: diff # of seasons has diff # visits/site
-# season_times0 <- c(list(c("fall", "summer", "winter"), c("spring", "summer", "winter"),
-#                         c("summer", "winter"), c("spring", "fall")
-#                         ),
-#                    unique_seasons)
-#   
-# season_times <- mclapply(season_times0, mc.cores = 6, FUN = function(x) {
-#   stops_w %>% filter(season %in% x) %>%
-#     mutate(version = paste0(length(x), ": ", paste0(x, collapse = ", ")),
-#            campaign =  1,
-#            design = "fewer seasons",
-#            )
-#   }
-#   ) %>%
-#   bind_rows() %>%
-#   group_by(location, route, campaign, design, version) %>%
-#   mutate(visits = n())%>%
-#   group_by(location, route, visits, campaign, design, version) %>%
-#   summarize_at(vars(variable_names), ~mean(.)) %>%
-#   ungroup() %>%
-#   select(names(balanced_season))
 
 ##################################################################################################
 ## randomly select fewer samples for the campaign (easy to simulate but less impractical?)
-### seq(5, 25, 5)
 
-visit_n <- seq(5, 25, 5)
+visit_n <- seq(4,24,4) 
 
-random_fewer <- list()
-
-for(i in seq_along(visit_n)) {
-  #i=1
-  temp <- future_replicate(n = sim_n, simplify = F,
-                                   expr = one_sample_avg(my_list = group_split(stops_w, location),
-                                                         my_sampling_fn = function(x) slice_sample(x, n  = visit_n[i]))
-  ) %>%
-    #unlist
-    bind_rows() %>%
-    #add simulation number & label
-    group_by(location, visits) %>%
-    mutate(campaign =  row_number(),
-           design = "fewer visits",
-           version = paste0(visit_n[i], "")
-           )
-  
-  random_fewer[[i]] <- temp
-  
-  }
-
-random_fewer <- bind_rows(random_fewer) %>% ungroup()
+# random_fewer <- list()
+# 
+# for(i in seq_along(visit_n)) {
+#   #i=1
+#   temp <- future_replicate(n = sim_n, simplify = F,
+#                                    expr = one_sample_avg(my_list = group_split(stops_w, location),
+#                                                          my_sampling_fn = function(x) slice_sample(x, n  = visit_n[i]))
+#   ) %>%
+#     #unlist
+#     bind_rows() %>%
+#     #add simulation number & label
+#     group_by(location, visits) %>%
+#     mutate(campaign =  row_number(),
+#            design = "fewer visits",
+#            version = paste0(visit_n[i], "")
+#            )
+#   
+#   random_fewer[[i]] <- temp
+#   
+#   }
+# 
+# random_fewer <- bind_rows(random_fewer) %>% ungroup()
 
 ##################################################################################################
-
-# only collect same number of samples 
-
 
 rh_bh <- list(sort(unique(c(rush_hours, business_hours))),
               business_hours, rush_hours
               )
 
 names(rh_bh) <- c("business & rush", "business", "rush")
-
-#x = group_split(stops_w, location)[[1]]
 
 rh_bh_df <- data.frame()
 
@@ -345,9 +317,9 @@ for(i in seq_along(rh_bh)) {
                            expr = one_sample_avg(my_list =group_split(stops_w, location), 
                            #mc.cores = 4, 
                            my_sampling_fn = function(x) {
-                             x %>% filter(tow2 == "Weekday",
+                             x %>% filter(tow2 == "weekday",
                                           hour %in% rh_bh[[i]]) %>%
-                               # NOTE: using sampling w/ replacement to ensure 10 samples/site 
+                               # NOTE: using sampling w/ replacement to ensure x samples/site 
                                slice_sample(n=fewer_hrs_seasons_n, replace=T)
                              }
                            )
@@ -366,41 +338,16 @@ for(i in seq_along(rh_bh)) {
   }
 
 
-
-
-
-
-
-                  
-# rh_bh_df <- mclapply(rh_bh, mc.cores = 4, FUN = function(x) {
-#                         stops_w %>% filter(tow2 == "Weekday",
-#                                            hour %in% x) %>%
-#                           mutate(version = ifelse(length(x) == length(rush_hours), "Rush Hours",
-#                                                   ifelse(length(x) == length(business_hours), "Business Hours", "Business & Rush Hours")
-#                                                   ),
-#                                  campaign =  1,
-#                                  design = "fewer hours") } ) %>%
-#   bind_rows() %>%
-#   group_by(location, route, design, version, campaign) %>%
-#   mutate(visits = n()) %>%
-#   group_by(location, route, visits, design, version, campaign) %>%
-#   summarize_at(vars(variable_names), ~mean(.)) %>%
-#   ungroup() %>%
-#   select(names(balanced_season))
-
-
-
 ##################################################################################################
 # combine TEMPORAL simulation results
 temporal_sims <- rbind(
   true_annual,
-  balanced_season_tow2,
-  balanced_season,
+  days,
   season_times,
-  random_fewer,
+  #random_fewer,
   rh_bh_df
   ) %>%
-  mutate(spatial_temporal = ifelse(grepl("full", design), "spatial temporal", "temporal"))
+  mutate(spatial_temporal = ifelse(grepl("full", design), "gold standard", "temporal"))
 
 
 ##################################################################################################
@@ -408,41 +355,98 @@ temporal_sims <- rbind(
 ##################################################################################################
 ### fewer number of stops/sites 
 
-site_n <- seq(50, 250, 50)
+site_n <- c(25, seq(50, 250, 50))
 
-fewer_sites <- future_replicate(n = sim_n, simplify = F, 
-                                expr = mclapply(site_n, mc.cores = 6, FUN = function(x) {
-                                  slice_sample(true_annual, n  = x) %>%
-                                    mutate(version = paste0(x, ""),
-                                           design = "fewer sites",
-                                           )}) ) %>%
-    bind_rows() %>%
-    mutate(campaign = rep(1:sim_n, each=sum(site_n)))
+# fewer_sites <- future_replicate(n = sim_n, simplify = F, 
+#                                 expr = mclapply(site_n, mc.cores = 6, FUN = function(x) {
+#                                   slice_sample(true_annual, n  = x) %>%
+#                                     mutate(version = paste0(x, ""),
+#                                            design = "fewer sites",
+#                                            )}) ) %>%
+#     bind_rows() %>%
+#     mutate(campaign = rep(1:sim_n, each=sum(site_n)))
       
 ##################################################################################################
-## smaller area/fewer routes
-### many sources: 1 (urban center, many participants), 6 (airport, Tacoma/suburban/industrial/port)   
-
-### --> using a loop in case we add more route combinations
-
-routes_list <- list(c(1:2), c(1:4), c(1:6)) 
-
-fewer_routes <- mclapply(routes_list, mc.cores = 6, FUN = function(x) {
-  filter(true_annual, route %in% x) %>%
-    mutate(version = paste(range(x), collapse = "-"),
-           design = "fewer routes",
-           campaign = 1)} ) %>%
-  bind_rows()  
+# ## smaller area/fewer routes
+# ### many sources: 1 (urban center, many participants), 6 (airport, Tacoma/suburban/industrial/port)   
+# 
+# routes_list <- list(c(1:2), c(1:4), c(1:6)) 
+# 
+# fewer_routes <- mclapply(routes_list, mc.cores = 6, FUN = function(x) {
+#   filter(true_annual, route %in% x) %>%
+#     mutate(version = paste(range(x), collapse = "-"),
+#            design = "fewer routes",
+#            campaign = 1)} ) %>%
+#   bind_rows()  
 
 ##################################################################################################
-# combine spatial simulations
-spatial_sims <- rbind(fewer_sites, fewer_routes) %>%
-  mutate(spatial_temporal = "spatial")
+# # combine spatial simulations
+# spatial_sims <- rbind(fewer_sites#, 
+#                       #fewer_routes
+#                       ) %>%
+#   mutate(spatial_temporal = "spatial")
+
+
+
+##################################################################################################
+# FEWER SITES & VISITS (TOTAL STOPS)
+##################################################################################################
+# site_n <- c(25, seq(50, 250, 50))
+# visit_n <- seq(4,24,4) 
+
+site_n2 <- append(site_n, length(unique(stops_w$location)))
+visit_n2 <- append(visit_n, round(mean(true_annual$visits))) 
+
+site_visit_df <- data.frame()
+
+for(v in visit_n2) {
+  # v = visit_n2[1]
+  temp <- replicate(n = sim_n, simplify = F,
+                         expr = mclapply(site_n2, mc.cores = 5, function(x) {
+                                                 #sample sites
+                                                 sample_sites <- sample(unique(stops_w$location), size = x, replace = F)
+                                                 
+                                                 #sample visits
+                                                 filter(stops_w, location %in% sample_sites) %>%
+                                                   group_by(location, route) %>%
+                                                   slice_sample(n = v) %>% 
+                                                   mutate(visits = n()) %>%
+                                                   #calculate annual average
+                                                   summarize_at(all_of(c(variable_names, "visits")), ~mean(.)) %>%
+                                                   mutate(
+                                                     version = paste0(v, "_visits ", x, "_sites")
+                                                   )
+                                                 })
+                         ) %>%
+  #unlist
+  bind_rows() %>%
+    
+  ungroup() %>%
+  mutate(
+    #campaign = rep(1:sim_n, each=s),
+    campaign = rep(1:sim_n, each=nrow(.)/sim_n),
+    design = "fewer total stops",
+    spatial_temporal = "spatial temporal"
+  ) 
+  
+  site_visit_df <- rbind(site_visit_df, temp)
+  
+  }
+
+site_visit_df <- select(site_visit_df, names(temporal_sims))
+
+# # how many total stops are there in the 278 sites x 26 visits since some sites have a max od 21-25 visits? # 7080
+# site_visit_df  %>% 
+#   filter(version == "26_visits 278_sites") %>% 
+#   distinct(location, visits) %>% 
+#   summarize(max_total_stops = sum(visits))
 
 ##################################################################################################
 # combine spatial and temporal simulations
 
-annual_training_set <- rbind(temporal_sims, spatial_sims)
+annual_training_set <- rbind(temporal_sims, #spatial_sims,
+                             site_visit_df
+                             )
 
 ##################################################################################################
 # SAVE DATA
