@@ -2,7 +2,11 @@
 
 ##################################################################################################
 # to run in terminal:
+<<<<<<< HEAD
 # 1. change directory:  cd ~/OneDrive\ -\ UW/Documents/Post\ Doc/Study\ Projects/ACT\ TRAP\ MM/ACT\ HEI\ Supp/act_hei_aim1a
+=======
+# 1. change directory:  cd ~/Documents/Post\ Doc/Study\ Projects/ACT\ TRAP\ MM/ACT\ HEI\ Supp/act_hei_aim1a
+>>>>>>> e07957797efac226aaf6282d1e71983cbe91881a
 # 2. run script:        Rscript 3_model_eval.R 
 
 ##################################################################################################
@@ -19,7 +23,13 @@ if (!is.null(sessionInfo()$otherPkgs)) {
 
 pacman::p_load(tidyverse,
                parallel, #mclapply; detectCores()
+<<<<<<< HEAD
                sf,  
+=======
+               #future.apply, #future_replicate()
+               sf, #for spatial data; st_
+               #sp #has muse datasedt       # ? nEED?
+>>>>>>> e07957797efac226aaf6282d1e71983cbe91881a
                units # set_units()
 )    
 
@@ -36,10 +46,15 @@ project_crs <- 4326  #lat/long
 m_crs <- 32148
  
 # uk predictions
+<<<<<<< HEAD
 predictions <- readRDS(file.path("Output", "UK Predictions", "all_predictions.rda"#, #"predictions.rda"
                                  )) %>% 
   #gather("reference", "estimate", contains("estimate")) %>%
   pivot_longer(contains("estimate"), names_to = "reference", values_to = "estimate") %>%
+=======
+predictions <- readRDS(file.path("Output", "predictions.rda")) %>% 
+  gather("reference", "estimate", contains("estimate")) %>%
+>>>>>>> e07957797efac226aaf6282d1e71983cbe91881a
   # some campaigns don't have "estimtes" for test set locations
   drop_na(estimate)
 
@@ -53,12 +68,26 @@ loc_lat_long <- readRDS(file.path("Output", "location_lat_long.rda")) %>%
   st_as_sf(coords = c('longitude', 'latitude'), crs=project_crs, remove = F) %>%
   st_transform(m_crs)  
 
+<<<<<<< HEAD
 # monitoring area shp 
 monitoring_region <- readRDS(file.path("..", "..", "1. Our Campaign", "Our Campaign R", "Data", "Output", "GIS", "monitoring_land_shp.rda")) %>%
   st_transform(m_crs)
 
 # spatial clusters
 #clusters0 <- readRDS(file.path("Output", "spatial_cluster.rda"))
+=======
+#location lat/long 
+loc_lat_long <- readRDS(file.path("Output", "location_lat_long.rda")) %>%
+  st_as_sf(coords = c('longitude', 'latitude'), crs=project_crs, remove = F) %>%
+  st_transform(m_crs)  
+
+# monitoring area shp 
+monitoring_region <- readRDS(file.path("..", "..", "1. Our Campaign", "Our Campaign R", "Data", "Output", "GIS", 
+                                       #"monitoring_area_shp.rda"
+                                       "monitoring_land_shp.rda"
+                                       )) %>%
+  st_transform(m_crs)
+>>>>>>> e07957797efac226aaf6282d1e71983cbe91881a
 
 ##################################################################################################
 # update datasets
@@ -83,14 +112,22 @@ validation_stats <- function(dt, prediction, reference){
   
   RMSE = sqrt(MSE_pred)
   MSE_based_R2 = max(1 - MSE_pred/MSE_obs, 0)
+<<<<<<< HEAD
   #reg_based_R2 = cor(dt[[reference]], dt[[prediction]], method = "pearson")^2
+=======
+  reg_based_R2 = cor(dt[[reference]], dt[[prediction]], method = "pearson")^2
+>>>>>>> e07957797efac226aaf6282d1e71983cbe91881a
   
   result <- distinct(dt, campaign, design, version, variable, out_of_sample, reference) %>%
     mutate(
       no_sites = nrow(dt),
       RMSE = RMSE,
       MSE_based_R2 = MSE_based_R2,
+<<<<<<< HEAD
       #reg_based_R2 = reg_based_R2
+=======
+      reg_based_R2 = reg_based_R2
+>>>>>>> e07957797efac226aaf6282d1e71983cbe91881a
     )
   
   return(result)
@@ -110,6 +147,7 @@ model_perf <- mclapply(group_split(predictions, campaign, design, version, varia
 
 # Additionally, for the spatial sims
 # Fewer random sites sims: RMSE vs Monitoring density (monitors/km2); avg distance between training monitors; avg distance between training and test (“cohort”) monitors 
+<<<<<<< HEAD
 
 # fn calculates the distance between 2 sf point datasets & calculates a distance (mean/min/max) summary statistic between two datasets
 ## ? idea: it's the closer locations that influence kriging in UK most 
@@ -173,8 +211,12 @@ model_perf <- mclapply(group_split(predictions, campaign, design, version, varia
 #   #calc monitoring density: 1 monitor every X km2
 #   mutate(training_monitors_per_100km2 = training_sites/monitoring_area*100
 #   ) 
+=======
+>>>>>>> e07957797efac226aaf6282d1e71983cbe91881a
 
+# fn calculates the distance between 2 sf point datasets & calculates a distance (mean/min/max) summary statistic between two datasets
 
+<<<<<<< HEAD
 ##################################################################################################
 # COMBINE MODEL EVAL & GEOGRAPHIC DISTANCES
 ##################################################################################################
@@ -190,12 +232,70 @@ select(model_perf , -no_sites) %>%
   saveRDS(., file.path("Output", "model_eval.rda"))
 
 print("done with 3_model_eval.R")
+=======
+pt_dist <- function(locs1, locs2, summary_stat = "mean", 
+                    loc_lat_long. = loc_lat_long
+                    ) {
+  #make datasets into sf objects
+  locs1 <- filter(loc_lat_long., location %in% locs1)
+  locs2 <- filter(loc_lat_long., location %in% locs2)
+  
 
+  dist_matrix <- st_distance(locs1,locs2) %>%  
+    #make numeric
+    drop_units() %>%
+    #replace all "0" distances (for same sites - e.g. training-training pt distances) w/ NA
+    na_if(0)
+  
+  #calc distance summary statistic (e.g. mean/min/max) of each dataset
+  result <- apply(dist_matrix, 1, summary_stat, na.rm=T) %>% 
+    #overall avg for both datasets
+    mean()
+  
+  return(result)
+  
+  }
 
+##################################################################################################
+# calc [mean] distances between training & prediction locations
 
+#x = group_split(predictions, campaign, design, version, out_of_sample)[[1]]
+
+train_test_dist <- mclapply(group_split(predictions, campaign, design, version, out_of_sample), mc.cores = 5, function(x) {
+>>>>>>> e07957797efac226aaf6282d1e71983cbe91881a
+
+  # prediction locations
+  pred_locs <- unique(x$location)
+  
+  #training locations used to build models for each sim
+  train_locs <- sims %>% 
+    filter(
+      campaign == first(x$campaign),
+      design == first(x$design),
+      version == first(x$version),
+      ) %>%  
+    distinct(location) %>% pull()
+  
+  dist = pt_dist(train_locs, pred_locs)
+  
+  x %>%
+    distinct(campaign, design, version, spatial_temporal, out_of_sample) %>%
+    mutate(
+      training_sites = length(train_locs),
+      prediction_sites = length(pred_locs),
+      dist = dist)
+  }) %>%
+  
+  bind_rows() %>%
+  mutate(dist = dist/1000) %>%
+  rename(mean_train_to_pred_dist_km = dist) %>%
+  #calc monitoring density: 1 monitor every X km2
+  mutate(training_monitors_per_100km2 = training_sites/monitoring_area*100
+  ) 
 
 
 ##################################################################################################
+<<<<<<< HEAD
 # TEST
 ##################################################################################################
 v1 <- c("RMSE", "MSE_based_R2")
@@ -238,3 +338,20 @@ lapply(v1, function(x){
   
   
   
+=======
+# COMBINE MODEL EVAL & GEOGRAPHIC DISTANCES
+##################################################################################################
+
+# train_test_dist, model_perf
+# note that only temporal sims have diff estimates for gs_estimate & campaign_estimate
+model_eval <- left_join(train_test_dist, select(model_perf, -no_sites))
+
+
+##################################################################################################
+# SAVE DATA
+##################################################################################################
+saveRDS(model_eval, file.path("Output", "model_eval.rda"))
+
+print("done with 3_model_eval.R")
+
+>>>>>>> e07957797efac226aaf6282d1e71983cbe91881a
